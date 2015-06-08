@@ -30,10 +30,8 @@ import (
 	"sync"
 	"text/template"
 	"time"
-
 	"github.com/prometheus/log"
 	"github.com/thorduri/pushover"
-
 	pb "github.com/prometheus/alertmanager/config/generated"
 )
 
@@ -478,7 +476,10 @@ func getSMTPAuth(hasAuth bool, mechs string) (smtp.Auth, *tls.Config, error) {
 			}
 
 			auth := smtp.PlainAuth(identity, username, password, host)
-			cfg := &tls.Config{ServerName: host}
+			cfg := &tls.Config{
+				InsecureSkipVerify: true,
+				ServerName: host,
+			}
 			return auth, cfg, nil
 		}
 	}
@@ -493,30 +494,48 @@ func (n *notifier) sendEmailNotification(to string, op notificationOp, a *Alert)
 	case notificationOpResolve:
 		status = "RESOLVED"
 	}
+		// We need to get just the hostname for TLS "host" variable.
+		username := os.Getenv("SMTP_AUTH_USERNAME")
+		identity := os.Getenv("SMTP_AUTH_IDENTITY")
+		password := os.Getenv("SMTP_AUTH_PASSWORD")
+		host, _, err := net.SplitHostPort(*smtpSmartHost)
+		auth := smtp.PlainAuth(identity, username, password, host)
+		cfg := &tls.Config {
+			InsecureSkipVerify: true,
+			ServerName: host,
+		}
 	// Connect to the SMTP smarthost.
-	c, err := smtp.Dial(*smtpSmartHost)
+	conn, err := tls.Dial("tcp", *smtpSmartHost, cfg)
 	if err != nil {
-		return err
+		log.Panic(err)
 	}
-	defer c.Quit()
+	defer conn.Close()
+
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		log.Panic(err)
+	}
+	if err = c.Auth(auth); err != nil {
+	     log.Panic(err)
+	}
 
 	// Authenticate if we and the server are both configured for it.
-	auth, tlsConfig, err := getSMTPAuth(c.Extension("AUTH"))
-	if err != nil {
-		return err
-	}
+//	auth, tlsConfig, err := getSMTPAuth(c.Extension("AUTH"))
+//	if err != nil {
+//		return err
+//	}
 
-	if tlsConfig != nil {
-		if err := c.StartTLS(tlsConfig); err != nil {
-			return fmt.Errorf("starttls failed: %s", err)
-		}
-	}
+//	if tlsConfig != nil {
+//		if err := c.StartTLS(tlsConfig); err != nil {
+//			return fmt.Errorf("starttls failed: %s", err)
+//		}
+//	}
 
-	if auth != nil {
-		if err := c.Auth(auth); err != nil {
-			return fmt.Errorf("%T failed: %s", auth, err)
-		}
-	}
+//	if auth != nil {
+//		if err := c.Auth(auth); err != nil {
+//			return fmt.Errorf("%T failed: %s", auth, err)
+//		}
+//	}
 
 	// Set the sender and recipient.
 	c.Mail(*smtpSender)
