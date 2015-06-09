@@ -609,7 +609,7 @@ func (n *notifier) handleNotification(a *Alert, op notificationOp, config *pb.No
 			continue
 		}
 		if err := n.sendEmailNotification(emailConfig.GetEmail(), op, a); err != nil {
-			log.Errorln("Error sending email notification:", err.Error())
+			log.Errorln("Error sending email notification:", err)
 		}
 	}
 	for _, poConfig := range config.PushoverConfig {
