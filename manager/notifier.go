@@ -30,9 +30,10 @@ import (
 	"sync"
 	"text/template"
 	"time"
+
+	pb "github.com/prometheus/alertmanager/config/generated"
 	"github.com/prometheus/log"
 	"github.com/thorduri/pushover"
-	pb "github.com/prometheus/alertmanager/config/generated"
 )
 
 const (
@@ -46,13 +47,10 @@ var bodyTmpl = template.Must(template.New("message").Parse(`From: Prometheus Ale
 To: {{.To}}
 Date: {{.Date}}
 Subject: [{{ .Status }}] {{.Alert.Labels.alertname}}: {{.Alert.Summary}}
-
 {{.Alert.Description}}
-
 Grouping labels:
 {{range $label, $value := .Alert.Labels}}
   {{$label}} = "{{$value}}"{{end}}
-
 Payload labels:
 {{range $label, $value := .Alert.Payload}}
   {{$label}} = "{{$value}}"{{end}}`))
@@ -444,6 +442,7 @@ func writeEmailBodyWithTime(w io.Writer, from, to, status string, a *Alert, mome
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -478,7 +477,7 @@ func getSMTPAuth(hasAuth bool, mechs string) (smtp.Auth, *tls.Config, error) {
 			auth := smtp.PlainAuth(identity, username, password, host)
 			cfg := &tls.Config{
 				InsecureSkipVerify: true,
-				ServerName: host,
+				ServerName:         host,
 			}
 			return auth, cfg, nil
 		}
@@ -494,48 +493,45 @@ func (n *notifier) sendEmailNotification(to string, op notificationOp, a *Alert)
 	case notificationOpResolve:
 		status = "RESOLVED"
 	}
-		// We need to get just the hostname for TLS "host" variable.
-		username := os.Getenv("SMTP_AUTH_USERNAME")
-		identity := os.Getenv("SMTP_AUTH_IDENTITY")
-		password := os.Getenv("SMTP_AUTH_PASSWORD")
-		host, _, err := net.SplitHostPort(*smtpSmartHost)
-		auth := smtp.PlainAuth(identity, username, password, host)
-		cfg := &tls.Config {
-			InsecureSkipVerify: true,
-			ServerName: host,
-		}
+	// We need to get just the hostname for TLS "host" variable.
+	username := os.Getenv("SMTP_AUTH_USERNAME")
+	identity := os.Getenv("SMTP_AUTH_IDENTITY")
+	password := os.Getenv("SMTP_AUTH_PASSWORD")
+	host, _, err := net.SplitHostPort(*smtpSmartHost)
+
+	auth := smtp.PlainAuth(identity, username, password, host)
+	cfg := &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         host,
+	}
 	// Connect to the SMTP smarthost.
 	conn, err := tls.Dial("tcp", *smtpSmartHost, cfg)
 	if err != nil {
 		log.Panic(err)
 	}
-	defer conn.Close()
 
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
 		log.Panic(err)
 	}
-	if err = c.Auth(auth); err != nil {
-	     log.Panic(err)
-	}
 
 	// Authenticate if we and the server are both configured for it.
-//	auth, tlsConfig, err := getSMTPAuth(c.Extension("AUTH"))
-//	if err != nil {
-//		return err
-//	}
+	//	auth, tlsConfig, err := getSMTPAuth(c.Extension("AUTH"))
+	//	if err != nil {
+	//		return err
+	//	}
 
-//	if tlsConfig != nil {
-//		if err := c.StartTLS(tlsConfig); err != nil {
-//			return fmt.Errorf("starttls failed: %s", err)
-//		}
-//	}
+	//	if tlsConfig != nil {
+	//		if err := c.StartTLS(tlsConfig); err != nil {
+	//			return fmt.Errorf("starttls failed: %s", err)
+	//		}
+	//	}
 
-//	if auth != nil {
-//		if err := c.Auth(auth); err != nil {
-//			return fmt.Errorf("%T failed: %s", auth, err)
-//		}
-//	}
+	if auth != nil {
+		if err := c.Auth(auth); err != nil {
+			return fmt.Errorf("%T failed: %s", auth, err)
+		}
+	}
 
 	// Set the sender and recipient.
 	c.Mail(*smtpSender)
@@ -546,9 +542,18 @@ func (n *notifier) sendEmailNotification(to string, op notificationOp, a *Alert)
 	if err != nil {
 		return err
 	}
-	defer wc.Close()
 
-	return writeEmailBody(wc, *smtpSender, status, to, a)
+	log.Infof("Writing email body\n")
+
+	err = writeEmailBody(wc, *smtpSender, to, status, a)
+	if err != nil {
+		log.Infof("Error sending email\n")
+	}
+
+	wc.Close()
+	c.Quit()
+	log.Infof("Sent email from %s to %s\n", *smtpSender, to)
+	return err
 }
 
 func (n *notifier) sendPushoverNotification(token string, op notificationOp, userKey string, a *Alert) error {
